@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "name": "DukaanOS",
+    "slug": "dukaan-os",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "android": {
+      "package": "com.dukaanos.app"
+    },
+    "ios": {
+      "bundleIdentifier": "com.dukaanos.app"
+    }
+  }
+}
