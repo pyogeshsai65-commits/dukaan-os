@@ -1,0 +1,8 @@
+import React from 'react';
+import { ScrollView, Text, View } from 'react-native';
+import { Button, SectionHeader } from '../components/Controls';
+import { styles } from '../components/styles';
+import { money } from '../utils/money';
+export default function CustomersScreen({ customers, actions }) {
+  return <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}><View style={styles.sectionCard}><SectionHeader title="Customer Ledger" subtitle="Outstanding udhaar" actionTitle="＋ Add" onAction={() => actions.modal('customer', true)} />{customers.length === 0 ? <View style={styles.emptyBox}><Text style={styles.emptyText}>No customers yet.</Text><Text style={styles.emptySubtext}>Add a customer to start tracking udhaar.</Text></View> : customers.map((c) => <View key={c.id} style={styles.customerCard}><View style={styles.customerAvatar}><Text style={styles.customerAvatarText}>{c.name.charAt(0).toUpperCase()}</Text></View><View style={styles.customerInfo}><Text style={styles.productName}>{c.name}</Text><Text style={styles.productMeta}>{c.phone || 'No phone number'}</Text></View><View style={styles.customerBalance}><Text style={[styles.customerAmount, c.balance > 0 ? styles.dueText : styles.clearText]}>{money(c.balance)}</Text><Text style={styles.customerStatus}>{c.balance > 0 ? 'Due' : 'Clear'}</Text></View></View>)}</View><View style={styles.sectionCard}><Text style={styles.sectionTitle}>Ledger Actions</Text><Button title="＋ Add Udhaar" onPress={() => actions.modal('udhaar', true)} disabled={!customers.length} /><Button title="＋ Receive Payment" onPress={() => actions.modal('payment', true)} variant="secondary" disabled={!customers.length} /></View></ScrollView>;
+}
