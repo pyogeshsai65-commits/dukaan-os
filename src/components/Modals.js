@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Pressable, Text, TextInput, View } from 'react-native';
 import { Button, FormField, ModalShell, PickerRow } from './Controls';
 import { styles } from './styles';
 import { money } from '../utils/money';
@@ -9,11 +9,158 @@ function Options({ items, selected, onSelect, detail }) {
 }
 function Actions({ cancel, confirm, title }) { return <View style={styles.modalActions}><Button title="Cancel" onPress={cancel} variant="danger" style={{ flex: 1 }} /><Button title={title} onPress={confirm} style={{ flex: 1 }} /></View>; }
 
-export function SaleModal({ visible, products, customers, onConfirm, onCancel }) {
-  const [productId, setProductId] = useState(''), [quantity, setQuantity] = useState('1'), [paymentMethod, setPaymentMethod] = useState('paid'), [customerId, setCustomerId] = useState('');
-  useEffect(() => { if (visible) { setProductId(products[0]?.id ?? ''); setQuantity('1'); setPaymentMethod('paid'); setCustomerId(customers[0]?.id ?? ''); } }, [visible, products.length, customers.length]);
-  const product = products.find((p) => p.id === Number(productId)); const total = product ? product.sellingPrice * (Number(quantity) || 0) : 0;
-  return <ModalShell visible={visible} title="Record Sale" onClose={onCancel}><Text style={styles.modalDescription}>Reduce stock and record the sale.</Text><Text style={styles.fieldLabel}>Product</Text><Options items={products} selected={productId} onSelect={setProductId} detail={(p) => `Stock ${p.stock} · Sell ${money(p.sellingPrice)}`} /><FormField label="Quantity" value={quantity} onChangeText={setQuantity} keyboardType="number-pad" placeholder="1" /><PickerRow label="Payment" value={paymentMethod} onChange={setPaymentMethod} options={[{ value: 'paid', label: 'Paid' }, { value: 'udhaar', label: 'Udhaar' }]} />{paymentMethod === 'udhaar' ? <><Text style={styles.fieldLabel}>Customer</Text><Options items={customers} selected={customerId} onSelect={setCustomerId} detail={(c) => `Current due ${money(c.balance)}`} /></> : null}<View style={styles.amountPreview}><Text style={styles.amountPreviewLabel}>Sale amount</Text><Text style={styles.amountPreviewValue}>{money(total)}</Text></View><Actions cancel={onCancel} confirm={() => onConfirm(productId, quantity, paymentMethod, customerId)} title="Record Sale" /></ModalShell>;
+export function SaleModal({ visible, products, customers, onConfirm, onAddCustomer, onCancel }) {
+  const [cart, setCart] = useState([]);
+  const [paymentMethod, setPaymentMethod] = useState('paid');
+  const [customerId, setCustomerId] = useState('');
+  const [addingCustomer, setAddingCustomer] = useState(false);
+  const [newCustomerName, setNewCustomerName] = useState('');
+  const [newCustomerPhone, setNewCustomerPhone] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (visible) {
+      setCart([]);
+      setPaymentMethod('paid');
+      setCustomerId('');
+      setAddingCustomer(false);
+      setNewCustomerName('');
+      setNewCustomerPhone('');
+      setError('');
+    }
+  }, [visible]);
+
+  useEffect(() => {
+    if (customerId && !customers.some((customer) => customer.id === Number(customerId))) setCustomerId('');
+  }, [customers, customerId]);
+
+  const cartTotal = cart.reduce((total, item) => total + item.price * Number(item.quantity || 0), 0);
+  const selectedCustomer = customers.find((customer) => customer.id === Number(customerId));
+
+  function addProduct(product) {
+    setError('');
+    if (Number(product.stock) <= 0) {
+      setError(`${product.name} is out of stock.`);
+      return;
+    }
+    setCart((current) => {
+      const existing = current.find((item) => item.productId === product.id);
+      if (existing) {
+        if (existing.quantity >= product.stock) return current;
+        return current.map((item) => item.productId === product.id ? { ...item, quantity: item.quantity + 1 } : item);
+      }
+      return [...current, { productId: product.id, name: product.name, stock: product.stock, price: Number(product.sellingPrice), quantity: 1 }];
+    });
+  }
+
+  function updateQuantity(productId, value) {
+    const product = products.find((item) => item.id === productId);
+    const quantity = Number(value);
+    setError('');
+    if (!product) return;
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setCart((current) => current.map((item) => item.productId === productId ? { ...item, quantity: value } : item));
+      return;
+    }
+    if (quantity > product.stock) {
+      setError(`Only ${product.stock} units of ${product.name} are available.`);
+      setCart((current) => current.map((item) => item.productId === productId ? { ...item, quantity: product.stock } : item));
+      return;
+    }
+    setCart((current) => current.map((item) => item.productId === productId ? { ...item, quantity } : item));
+  }
+
+  function removeProduct(productId) {
+    setCart((current) => current.filter((item) => item.productId !== productId));
+    setError('');
+  }
+
+  function saveInlineCustomer() {
+    const cleanName = newCustomerName.trim();
+    if (!cleanName) {
+      setError('Enter a customer name to continue with udhaar.');
+      return;
+    }
+    if (customers.some((customer) => customer.name.toLowerCase() === cleanName.toLowerCase())) {
+      setError('A customer with this name already exists. Select the existing customer instead.');
+      return;
+    }
+    const customer = onAddCustomer(newCustomerName, newCustomerPhone);
+    if (customer) {
+      setCustomerId(customer.id);
+      setNewCustomerName('');
+      setNewCustomerPhone('');
+      setAddingCustomer(false);
+      setError('');
+    }
+  }
+
+  function submit() {
+    if (cart.length === 0) {
+      setError('Add at least one product to the sale.');
+      return;
+    }
+    const invalid = cart.find((item) => !Number.isFinite(Number(item.quantity)) || Number(item.quantity) <= 0);
+    if (invalid) {
+      setError(`Enter a valid quantity for ${invalid.name}.`);
+      return;
+    }
+    if (paymentMethod === 'udhaar' && !selectedCustomer) {
+      setError('Select a customer or add a new customer for udhaar.');
+      return;
+    }
+    onConfirm(cart, paymentMethod, customerId);
+  }
+
+  return <ModalShell visible={visible} title="Record Sale" onClose={onCancel}>
+    <Text style={styles.modalDescription}>Build one sale with multiple products.</Text>
+    <Text style={styles.fieldLabel}>SALE CART</Text>
+    {cart.length === 0 ? <Text style={styles.emptyText}>No products selected yet. Add products below.</Text> : cart.map((item) => (
+      <View key={item.productId} style={styles.optionRow}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.optionTitle}>{item.name}</Text>
+          <Text style={styles.optionMeta}>Available {item.stock} · {money(item.price)} each</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 8 }}>
+            <Pressable onPress={() => updateQuantity(item.productId, Math.max(1, Number(item.quantity || 1) - 1))} style={styles.selectChip}><Text style={styles.selectChipText}>−</Text></Pressable>
+            <TextInput value={String(item.quantity)} onChangeText={(value) => updateQuantity(item.productId, value)} keyboardType="number-pad" style={[styles.input, { width: 58, height: 38, textAlign: 'center', marginHorizontal: 6 }]} />
+            <Pressable onPress={() => updateQuantity(item.productId, Math.min(item.stock, Number(item.quantity || 0) + 1))} style={styles.selectChip}><Text style={styles.selectChipText}>＋</Text></Pressable>
+            <Text style={[styles.optionTitle, { marginLeft: 'auto' }]}>{money(item.price * Number(item.quantity || 0))}</Text>
+          </View>
+        </View>
+        <Pressable onPress={() => removeProduct(item.productId)} style={styles.deleteButton}><Text style={styles.deleteText}>Remove</Text></Pressable>
+      </View>
+    ))}
+    <Text style={styles.fieldLabel}>Select Products</Text>
+    <View style={styles.optionList}>
+      {products.map((product) => {
+        const selected = cart.some((item) => item.productId === product.id);
+        return <Pressable key={product.id} onPress={() => addProduct(product)} style={styles.optionRow}>
+          <View style={{ flex: 1 }}><Text style={styles.optionTitle}>{product.name}</Text><Text style={styles.optionMeta}>Stock {product.stock} · Sell {money(product.sellingPrice)}</Text></View>
+          <Text style={styles.check}>{selected ? '＋ Add More' : '＋ Add'}</Text>
+        </Pressable>;
+      })}
+    </View>
+    <View style={styles.amountPreview}><Text style={styles.amountPreviewLabel}>Sale total</Text><Text style={styles.amountPreviewValue}>{money(cartTotal)}</Text></View>
+    <PickerRow label="Payment" value={paymentMethod} onChange={(value) => { setPaymentMethod(value); setError(''); }} options={[{ value: 'paid', label: 'Paid' }, { value: 'udhaar', label: 'Udhaar' }]} />
+    {paymentMethod === 'udhaar' ? <View>
+      <Text style={styles.fieldLabel}>Customer</Text>
+      {addingCustomer ? <View style={styles.sectionCard}>
+        <Text style={styles.modalDescription}>Add a customer to continue with udhaar.</Text>
+        <FormField label="Customer Name" value={newCustomerName} onChangeText={setNewCustomerName} placeholder="e.g. Ramesh" />
+        <FormField label="Phone" value={newCustomerPhone} onChangeText={setNewCustomerPhone} keyboardType="phone-pad" placeholder="Optional" />
+        <View style={styles.modalActions}><Button title="Back" onPress={() => setAddingCustomer(false)} variant="secondary" style={{ flex: 1 }} /><Button title="Save Customer" onPress={saveInlineCustomer} style={{ flex: 1 }} /></View>
+      </View> : customers.length === 0 ? <View style={styles.emptyBox}>
+        <Text style={styles.emptyText}>No customers yet</Text>
+        <Text style={styles.emptySubtext}>Add a customer to continue with udhaar.</Text>
+        <Button title="＋ Add Customer" onPress={() => setAddingCustomer(true)} />
+      </View> : <View>
+        <Options items={customers} selected={customerId} onSelect={(id) => { setCustomerId(id); setError(''); }} detail={(customer) => `Current due ${money(customer.balance)}`} />
+        <Button title="＋ Add New Customer" onPress={() => setAddingCustomer(true)} variant="secondary" />
+      </View>}
+    </View> : null}
+    {error ? <Text style={styles.warningText}>{error}</Text> : null}
+    <View style={styles.modalActions}><Button title="Cancel" onPress={onCancel} variant="danger" style={{ flex: 1 }} /><Button title="Record Sale" onPress={submit} style={{ flex: 1 }} /></View>
+  </ModalShell>;
 }
 export function PurchaseModal({ visible, products, onConfirm, onCancel }) {
   const [productId, setProductId] = useState(''), [quantity, setQuantity] = useState('1');
