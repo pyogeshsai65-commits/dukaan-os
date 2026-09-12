@@ -10,6 +10,9 @@
     },
     "ios": {
       "bundleIdentifier": "com.dukaanos.app"
-    }
+    },
+    "plugins": [
+      "expo-sharing"
+    ]
   }
 }

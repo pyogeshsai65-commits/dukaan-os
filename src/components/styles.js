@@ -111,6 +111,11 @@ const styles = StyleSheet.create({
   amountPreviewLabel: { color: '#64748b', fontSize: 11, fontWeight: '700' },
   amountPreviewValue: { color: '#0f172a', fontSize: 19, fontWeight: '900' },
   modalActions: { flexDirection: 'row', gap: 10, marginTop: 4, marginBottom: 4 },
+  reportInsight: { color: '#334155', fontSize: 13, lineHeight: 21, paddingVertical: 3 },
+  reportHeading: { color: '#0f172a', fontWeight: '800', fontSize: 12, marginTop: 10, marginBottom: 4 },
+  reportLine: { color: '#475569', fontSize: 12, paddingVertical: 4, borderTopWidth: 1, borderTopColor: '#f1f5f9' },
+  collectionCard: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderTopWidth: 1, borderTopColor: '#f1f5f9' },
+  collectionDue: { color: '#be123c', fontSize: 11, fontWeight: '800', marginTop: 4 },
 });
 
 export { styles };

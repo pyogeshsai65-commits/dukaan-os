@@ -31,11 +31,11 @@ export function SaleModal({ visible, products, customers, onConfirm, onAddCustom
   }, [visible]);
 
   useEffect(() => {
-    if (customerId && !customers.some((customer) => customer.id === Number(customerId))) setCustomerId('');
+    if (customerId && !customers.some((customer) => String(customer.id) === String(customerId))) setCustomerId('');
   }, [customers, customerId]);
 
   const cartTotal = cart.reduce((total, item) => total + item.price * Number(item.quantity || 0), 0);
-  const selectedCustomer = customers.find((customer) => customer.id === Number(customerId));
+  const selectedCustomer = customers.find((customer) => String(customer.id) === String(customerId));
 
   function addProduct(product) {
     setError('');
@@ -165,13 +165,13 @@ export function SaleModal({ visible, products, customers, onConfirm, onAddCustom
 export function PurchaseModal({ visible, products, onConfirm, onCancel }) {
   const [productId, setProductId] = useState(''), [quantity, setQuantity] = useState('1');
   useEffect(() => { if (visible) { setProductId(products[0]?.id ?? ''); setQuantity('1'); } }, [visible, products.length]);
-  const product = products.find((p) => p.id === Number(productId)); const total = product ? product.purchasePrice * (Number(quantity) || 0) : 0;
+  const product = products.find((p) => String(p.id) === String(productId)); const total = product ? product.purchasePrice * (Number(quantity) || 0) : 0;
   return <ModalShell visible={visible} title="Add Purchase" onClose={onCancel}><Text style={styles.modalDescription}>Increase stock using the purchase price.</Text><Text style={styles.fieldLabel}>Product</Text><Options items={products} selected={productId} onSelect={setProductId} detail={(p) => `Buy ${money(p.purchasePrice)} · Stock ${p.stock}`} /><FormField label="Quantity" value={quantity} onChangeText={setQuantity} keyboardType="number-pad" placeholder="1" /><View style={styles.amountPreview}><Text style={styles.amountPreviewLabel}>Purchase amount</Text><Text style={styles.amountPreviewValue}>{money(total)}</Text></View><Actions cancel={onCancel} confirm={() => onConfirm(productId, quantity)} title="Add Purchase" /></ModalShell>;
 }
 export function AddProductModal({ visible, onConfirm, onCancel }) {
-  const [name, setName] = useState(''), [purchasePrice, setPurchasePrice] = useState(''), [sellingPrice, setSellingPrice] = useState(''), [stock, setStock] = useState('');
-  useEffect(() => { if (visible) { setName(''); setPurchasePrice(''); setSellingPrice(''); setStock(''); } }, [visible]);
-  return <ModalShell visible={visible} title="Add Product" onClose={onCancel}><Text style={styles.modalDescription}>Create a product with its opening stock.</Text><FormField label="Product Name" value={name} onChangeText={setName} placeholder="e.g. Britannia Biscuit" /><FormField label="Purchase Price" value={purchasePrice} onChangeText={setPurchasePrice} keyboardType="decimal-pad" placeholder="0" /><FormField label="Selling Price" value={sellingPrice} onChangeText={setSellingPrice} keyboardType="decimal-pad" placeholder="0" /><FormField label="Opening Stock" value={stock} onChangeText={setStock} keyboardType="number-pad" placeholder="0" /><Actions cancel={onCancel} confirm={() => onConfirm(name, purchasePrice, sellingPrice, stock)} title="Add Product" /></ModalShell>;
+  const [name, setName] = useState(''), [purchasePrice, setPurchasePrice] = useState(''), [sellingPrice, setSellingPrice] = useState(''), [stock, setStock] = useState(''), [barcode, setBarcode] = useState(''), [expiryDate, setExpiryDate] = useState('');
+  useEffect(() => { if (visible) { setName(''); setPurchasePrice(''); setSellingPrice(''); setStock(''); setBarcode(''); setExpiryDate(''); } }, [visible]);
+  return <ModalShell visible={visible} title="Add Product" onClose={onCancel}><Text style={styles.modalDescription}>Create a product with its opening stock.</Text><FormField label="Product Name" value={name} onChangeText={setName} placeholder="e.g. Britannia Biscuit" /><FormField label="Purchase Price" value={purchasePrice} onChangeText={setPurchasePrice} keyboardType="decimal-pad" placeholder="0" /><FormField label="Selling Price" value={sellingPrice} onChangeText={setSellingPrice} keyboardType="decimal-pad" placeholder="0" /><FormField label="Opening Stock" value={stock} onChangeText={setStock} keyboardType="number-pad" placeholder="0" /><FormField label="Barcode (optional)" value={barcode} onChangeText={setBarcode} keyboardType="number-pad" placeholder="Scan or enter barcode" /><FormField label="Expiry date (optional)" value={expiryDate} onChangeText={setExpiryDate} placeholder="YYYY-MM-DD" /><Actions cancel={onCancel} confirm={() => onConfirm(name, purchasePrice, sellingPrice, stock, barcode, expiryDate)} title="Add Product" /></ModalShell>;
 }
 export function AddCustomerModal({ visible, onConfirm, onCancel }) {
   const [name, setName] = useState(''), [phone, setPhone] = useState(''); useEffect(() => { if (visible) { setName(''); setPhone(''); } }, [visible]);
@@ -183,3 +183,8 @@ function LedgerModal({ visible, title, description, customers, onConfirm, onCanc
 }
 export function UdhaarModal(props) { return <LedgerModal {...props} title="Add Udhaar" description="Add an outstanding amount without creating a product sale." actionTitle="Add Udhaar" />; }
 export function PaymentModal(props) { return <LedgerModal {...props} title="Receive Payment" description="Reduce a customer's outstanding balance." actionTitle="Receive Payment" payment />; }
+export function ExpenseModal({ visible, onConfirm, onCancel }) {
+  const [category, setCategory] = useState('general'), [amount, setAmount] = useState(''), [note, setNote] = useState('');
+  useEffect(() => { if (visible) { setCategory('general'); setAmount(''); setNote(''); } }, [visible]);
+  return <ModalShell visible={visible} title="Add Expense" onClose={onCancel}><Text style={styles.modalDescription}>Track shop costs for an accurate net profit.</Text><FormField label="Category" value={category} onChangeText={setCategory} placeholder="rent, transport, etc." /><FormField label="Amount" value={amount} onChangeText={setAmount} keyboardType="decimal-pad" placeholder="0" /><FormField label="Note (optional)" value={note} onChangeText={setNote} placeholder="What was this for?" /><Actions cancel={onCancel} confirm={() => onConfirm(category, amount, note)} title="Add Expense" /></ModalShell>;
+}
