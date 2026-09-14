@@ -3,6 +3,7 @@ import { Alert, Pressable, StatusBar, Text, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DukaanProvider, useDukaan } from './src/store/DukaanContext';
 import { AuthProvider } from './src/store/AuthContext';
+import { ShopProvider } from './src/store/ShopContext';
 import { createTransaction, createExpense, createInventoryAdjustment, eventForTransaction } from './src/services/operations';
 import { nextId, isoNow } from './src/utils/id';
 import { totalProfit, totalStockValue, totalUdhaar } from './src/store/selectors';
@@ -198,9 +199,11 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <AuthProvider>
-        <DukaanProvider>
-          <Dashboard />
-        </DukaanProvider>
+        <ShopProvider>
+          <DukaanProvider>
+            <Dashboard />
+          </DukaanProvider>
+        </ShopProvider>
       </AuthProvider>
     </SafeAreaProvider>
   );
