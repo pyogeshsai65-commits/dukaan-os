@@ -5,14 +5,25 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
+    "icon": "./assets/icon.png",
     "android": {
-      "package": "com.dukaanos.app"
+      "package": "com.dukaanos.app",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon-foreground.png",
+        "backgroundColor": "#6E1428"
+      }
     },
     "ios": {
       "bundleIdentifier": "com.dukaanos.app"
     },
     "plugins": [
       "expo-sharing"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "1928c0bd-2c89-4625-a3d4-fe6bb6937e5f"
+      }
+    }
   }
 }
