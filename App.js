@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Pressable, StatusBar, Text, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DukaanProvider, useDukaan } from './src/store/DukaanContext';
+import { AuthProvider } from './src/store/AuthContext';
 import { createTransaction, createExpense, createInventoryAdjustment, eventForTransaction } from './src/services/operations';
 import { nextId, isoNow } from './src/utils/id';
 import { totalProfit, totalStockValue, totalUdhaar } from './src/store/selectors';
@@ -193,4 +194,14 @@ function Dashboard() {
   return <View style={[styles.safeArea, { paddingTop: insets.top, paddingBottom: insets.bottom }]}><StatusBar barStyle="dark-content" /><View style={styles.appShell}><View pointerEvents="none" style={styles.shellBackground} /><ManuscriptBackdrop /><View style={styles.appContentLayer}><View style={styles.topBar}><View><Text style={styles.appTitle}>DU<Text style={{ color: '#C89B3C' }}>KAN</Text><Text style={{ color: '#8B2638' }}>OS</Text></Text><Text style={styles.appSubtitle}>{title}</Text></View><Pressable onPress={() => setMenuOpen((open) => !open)} accessibilityRole="button" accessibilityLabel={menuOpen ? 'Close navigation menu' : 'Open navigation menu'} accessibilityState={{ expanded: menuOpen }} style={styles.menuButton}><Text style={styles.menuButtonText}>☰</Text></Pressable>{menuOpen ? <View style={styles.menuPanel}>{menuItems.map(([tab, label]) => <Pressable key={tab} onPress={() => selectTab(tab)} accessibilityRole="menuitem" style={[styles.menuItem, activeTab === tab && styles.menuItemActive]}><Text style={[styles.menuItemText, activeTab === tab && styles.menuItemTextActive]}>{label}</Text></Pressable>)}</View> : null}</View><View style={styles.mainContent}>{activeTab === 'home' ? <HomeScreen data={data} actions={actions} /> : activeTab === 'inventory' ? <InventoryScreen products={activeProducts} search={search} setSearch={setSearch} actions={actions} /> : activeTab === 'customers' ? <CustomersScreen customers={customerViews} actions={actions} /> : activeTab === 'collections' ? <CollectionsScreen customers={customerViews} actions={actions} /> : activeTab === 'reports' ? <ReportsScreen state={{ ...state, customers: customerViews }} /> : activeTab === 'archive' ? <ArchiveScreen products={archivedProducts} actions={actions} /> : activeTab === 'recycleBin' ? <RecycleBinScreen products={deletedProducts} actions={actions} /> : <TransactionsScreen transactions={transactions} actions={actions} />}</View>
   <SaleModal visible={!!modals.sale} products={activeProducts} customers={customerViews} onConfirm={recordSale} onAddCustomer={(name, phone) => addCustomer(name, phone, false)} onCancel={() => modal('sale', false)} /><PurchaseModal visible={!!modals.purchase} products={activeProducts} onConfirm={recordPurchase} onCancel={() => modal('purchase', false)} /><RemoveStockModal visible={!!modals.removeStock} product={stockAdjustmentProduct} onConfirm={removeStock} onCancel={() => { modal('removeStock', false); setStockAdjustmentProduct(null); }} /><AddStockModal visible={!!modals.addStock} product={stockAdditionProduct} onConfirm={addStock} onCancel={() => { modal('addStock', false); setStockAdditionProduct(null); }} /><AddProductModal visible={!!modals.product} onConfirm={addProduct} onCancel={() => modal('product', false)} /><AddCustomerModal visible={!!modals.customer} onConfirm={addCustomer} onCancel={() => modal('customer', false)} /><UdhaarModal visible={!!modals.udhaar} customers={customerViews} onConfirm={addUdhaar} onCancel={() => modal('udhaar', false)} /><PaymentModal visible={!!modals.payment} customers={customerViews} onConfirm={receivePayment} onCancel={() => modal('payment', false)} /><ExpenseModal visible={!!modals.expense} onConfirm={recordExpense} onCancel={() => modal('expense', false)} /></View></View></View>;
 }
-export default function App() { return <SafeAreaProvider><DukaanProvider><Dashboard /></DukaanProvider></SafeAreaProvider>; }
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <AuthProvider>
+        <DukaanProvider>
+          <Dashboard />
+        </DukaanProvider>
+      </AuthProvider>
+    </SafeAreaProvider>
+  );
+}
