@@ -1,104 +1,1901 @@
-import React, { useMemo, useState } from 'react';
-import { Alert, Pressable, SafeAreaView, StatusBar, Text, View } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Pressable, StatusBar, Text, TextInput, View } from 'react-native';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { DukaanProvider, useDukaan } from './src/store/DukaanContext';
+import { AuthProvider, useAuth } from './src/store/AuthContext';
+import { ShopProvider } from './src/store/ShopContext';
+import {
+  createTransaction,
+  createExpense,
+  createInventoryAdjustment,
+  eventForTransaction,
+} from './src/services/operations';
+import { nextId, isoNow } from './src/utils/id';
 import { totalProfit, totalStockValue, totalUdhaar } from './src/store/selectors';
+import { fromPaise, toPaise } from './src/utils/money';
+import { customerBalance } from './src/store/ledger';
 import { styles } from './src/components/styles';
-import { SaleModal, PurchaseModal, AddProductModal, AddCustomerModal, UdhaarModal, PaymentModal } from './src/components/Modals';
+import {
+  SaleModal,
+  PurchaseModal,
+  RemoveStockModal,
+  AddStockModal,
+  AddProductModal,
+  AddCustomerModal,
+  UdhaarModal,
+  PaymentModal,
+  ExpenseModal,
+} from './src/components/Modals';
 import HomeScreen from './src/screens/HomeScreen';
 import InventoryScreen from './src/screens/InventoryScreen';
 import CustomersScreen from './src/screens/CustomersScreen';
 import TransactionsScreen from './src/screens/TransactionsScreen';
-import { money } from './src/utils/money';
+import ReportsScreen from './src/screens/ReportsScreen';
+import CollectionsScreen from './src/screens/CollectionsScreen';
+import ArchiveScreen from './src/screens/ArchiveScreen';
+import RecycleBinScreen from './src/screens/RecycleBinScreen';
+import AIAssistantScreen from './src/screens/AIAssistantScreen';
+import ManuscriptBackdrop from './src/components/ManuscriptBackdrop';
+
+const RECYCLE_RETENTION_MS = 15 * 24 * 60 * 60 * 1000;
 
 function Dashboard() {
-  const { state, set } = useDukaan();
+  const { state, set, domain } = useDukaan();
+  const insets = useSafeAreaInsets();
   const { products, sales, purchases, transactions, customers } = state;
-  const [activeTab, setActiveTab] = useState('home'), [search, setSearch] = useState('');
-  const [modals, setModals] = useState({});
-  const modal = (name, visible) => setModals((current) => ({ ...current, [name]: visible }));
-  const actions = { modal, tab: setActiveTab, deleteProduct: (id) => { const product = products.find((p) => p.id === id); Alert.alert('Delete Product', `Delete ${product?.name || 'this product'}?`, [{ text: 'Cancel', style: 'cancel' }, { text: 'Delete', style: 'destructive', onPress: () => set('products', (current) => current.filter((p) => p.id !== id)) }]); } };
-  function recordSale(items, paymentMethod, customerId) {
-    if (!Array.isArray(items) || items.length === 0) return Alert.alert('Record Sale', 'Add at least one product to the sale.');
-    const customer = customers.find((c) => c.id === Number(customerId));
-    if (paymentMethod === 'udhaar' && !customer) return Alert.alert('Record Sale', 'Select or add a customer for an udhaar sale.');
 
-    const lineItems = items.map((item) => {
-      const product = products.find((p) => p.id === Number(item.productId));
-      const quantity = Number(item.quantity);
-      return {
-        product,
-        quantity,
-        valid: !!product && Number.isFinite(quantity) && quantity > 0 && quantity <= Number(product?.stock || 0),
-      };
-    });
-    const invalidItem = lineItems.find((item) => !item.valid);
-    if (invalidItem) {
-      if (!invalidItem.product) return Alert.alert('Record Sale', 'One selected product is no longer available.');
-      if (!Number.isFinite(invalidItem.quantity) || invalidItem.quantity <= 0) return Alert.alert('Record Sale', `Enter a valid quantity for ${invalidItem.product.name}.`);
-      return Alert.alert('Record Sale', `Only ${invalidItem.product.stock} units of ${invalidItem.product.name} are available.`);
+  const [activeTab, setActiveTab] = useState('home');
+  const [search, setSearch] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [stockAdjustmentProduct, setStockAdjustmentProduct] = useState(null);
+  const [stockAdditionProduct, setStockAdditionProduct] = useState(null);
+  const [modals, setModals] = useState({});
+  const startupPurgeRequested = useRef(false);
+
+  const modal = (name, visible) =>
+    setModals((current) => ({ ...current, [name]: visible }));
+
+  const actions = {
+    modal,
+    tab: setActiveTab,
+    reversePayment,
+    addStock: (product) => {
+      setStockAdditionProduct(product);
+      modal('addStock', true);
+    },
+    removeStock: (product) => {
+      setStockAdjustmentProduct(product);
+      modal('removeStock', true);
+    },
+    archiveProduct,
+    restoreProduct,
+    deleteProduct,
+    purgeExpiredDeletedProducts,
+  };
+
+  async function recordSale(items, paymentMethod, customerId, operationId) {
+    if (!Array.isArray(items) || items.length === 0) {
+      return Alert.alert('Record Sale', 'Add at least one product to the sale.');
     }
 
-    const timestamp = Date.now();
-    const saleItems = lineItems.map(({ product, quantity }) => ({
-      productId: product.id,
-      productName: product.name,
-      quantity,
-      unitPrice: Number(product.sellingPrice),
-      unitCost: Number(product.purchasePrice),
-      amount: Number(product.sellingPrice) * quantity,
-      profit: (Number(product.sellingPrice) - Number(product.purchasePrice)) * quantity,
-    }));
-    const amount = saleItems.reduce((total, item) => total + item.amount, 0);
-    const profit = saleItems.reduce((total, item) => total + item.profit, 0);
-    const quantity = saleItems.reduce((total, item) => total + item.quantity, 0);
-    set('products', (current) => current.map((product) => {
-      const item = saleItems.find((line) => line.productId === product.id);
-      return item ? { ...product, stock: product.stock - item.quantity } : product;
-    }));
-    set('sales', (value) => value + amount);
-    if (paymentMethod === 'udhaar') set('customers', (current) => current.map((c) => c.id === customer.id ? { ...c, balance: Number(c.balance || 0) + amount } : c));
-    set('transactions', (current) => [{
-      id: timestamp,
-      type: paymentMethod === 'udhaar' ? 'credit-sale' : 'sale',
-      productName: saleItems.length === 1 ? saleItems[0].productName : `${saleItems.length} products`,
-      quantity,
-      amount,
-      profit,
-      timestamp,
-      customerName: customer?.name || '',
-      customerId: customer?.id,
-      paymentMethod,
-      items: saleItems,
-      note: paymentMethod === 'udhaar' ? `Sale on udhaar to ${customer.name}` : 'Paid sale',
-    }, ...current]);
+    const result = await domain((current) => {
+      const customer = current.customers.find(
+        (c) => String(c.id) === String(customerId),
+      );
+
+      if (paymentMethod === 'udhaar' && !customer) {
+        return { error: 'Select or add a customer for an udhaar sale.' };
+      }
+
+      const merged = items.reduce(
+        (map, item) =>
+          map.set(
+            String(item.productId),
+            (map.get(String(item.productId)) || 0) +
+              Number(item.quantity),
+          ),
+        new Map(),
+      );
+
+      const saleItems = [];
+
+      for (const [productId, quantity] of merged) {
+        const product = current.products.find(
+          (p) =>
+            String(p.id) === productId &&
+            !p.archived &&
+            !p.deletedAt,
+        );
+
+        if (!product) {
+          return { error: 'One selected product is no longer available.' };
+        }
+
+        if (!Number.isFinite(quantity) || quantity <= 0) {
+          return {
+            error: `Enter a valid quantity for ${product.name}.`,
+          };
+        }
+
+        if (quantity > Number(product.stock || 0)) {
+          return {
+            error: `Only ${product.stock} units of ${product.name} are available.`,
+          };
+        }
+
+        const unitPrice = Number(product.sellingPrice);
+        const unitCost = Number(product.purchasePrice);
+
+        saleItems.push({
+          productId: product.id,
+          productName: product.name,
+          quantity,
+          unitPrice,
+          unitCost,
+          amount: fromPaise(toPaise(unitPrice) * quantity),
+          profit: fromPaise(
+            (toPaise(unitPrice) - toPaise(unitCost)) * quantity,
+          ),
+        });
+      }
+
+      const amount = fromPaise(
+        saleItems.reduce(
+          (total, item) => total + toPaise(item.amount),
+          0,
+        ),
+      );
+
+      const profit = fromPaise(
+        saleItems.reduce(
+          (total, item) => total + toPaise(item.profit),
+          0,
+        ),
+      );
+
+      const transaction = createTransaction({
+        type: paymentMethod === 'udhaar' ? 'credit-sale' : 'sale',
+        productName:
+          saleItems.length === 1
+            ? saleItems[0].productName
+            : `${saleItems.length} products`,
+        quantity: saleItems.reduce(
+          (total, item) => total + item.quantity,
+          0,
+        ),
+        amount,
+        profit,
+        customerName: customer?.name || '',
+        customerId: customer?.id,
+        paymentMethod,
+        items: saleItems,
+        note:
+          paymentMethod === 'udhaar'
+            ? `Sale on udhaar to ${customer.name}`
+            : 'Paid sale',
+      });
+
+      return {
+        update: {
+          products: current.products.map((product) => {
+            const item = saleItems.find(
+              (line) =>
+                String(line.productId) === String(product.id),
+            );
+
+            return item
+              ? {
+                  ...product,
+                  stock:
+                    Number(product.stock) - item.quantity,
+                }
+              : product;
+          }),
+          sales: fromPaise(
+            toPaise(current.sales) + toPaise(amount),
+          ),
+          transactions: [
+            transaction,
+            ...current.transactions,
+          ],
+        },
+        events: [eventForTransaction(transaction)],
+      };
+    }, [], operationId);
+
+    if (!result.saved) {
+      return Alert.alert(
+        'Record Sale',
+        result.error?.message ||
+          'Could not save the sale. Please retry.',
+      );
+    }
+
     modal('sale', false);
   }
-  function recordPurchase(productId, quantity) {
-    const product = products.find((p) => p.id === Number(productId)), qty = Number(quantity); if (!product) return Alert.alert('Add Purchase', 'Please select a product.'); if (!qty || qty <= 0) return Alert.alert('Add Purchase', 'Enter a valid quantity.');
-    const amount = Number(product.purchasePrice) * qty, timestamp = Date.now(); set('products', (current) => current.map((p) => p.id === product.id ? { ...p, stock: p.stock + qty } : p)); set('purchases', (value) => value + amount); set('transactions', (current) => [{ id: timestamp, type: 'purchase', productName: product.name, quantity: qty, amount, profit: 0, timestamp }, ...current]); modal('purchase', false);
+
+  async function recordPurchase(productId, quantity) {
+    const result = await domain((current) => {
+      const product = current.products.find(
+        (p) =>
+          String(p.id) === String(productId) &&
+          !p.archived &&
+          !p.deletedAt,
+      );
+
+      const qty = Number(quantity);
+
+      if (!product) {
+        return { error: 'Please select a product.' };
+      }
+
+      if (!Number.isFinite(qty) || qty <= 0) {
+        return { error: 'Enter a valid quantity.' };
+      }
+
+      const unitCost = Number(product.purchasePrice);
+      const amount = fromPaise(toPaise(unitCost) * qty);
+
+      const transaction = createTransaction({
+        type: 'purchase',
+        productId: product.id,
+        productName: product.name,
+        quantity: qty,
+        amount,
+        unitCost,
+        items: [
+          {
+            productId: product.id,
+            productName: product.name,
+            quantity: qty,
+            unitCost,
+            unitPrice: unitCost,
+            amount,
+            profit: 0,
+          },
+        ],
+        profit: 0,
+      });
+
+      return {
+        update: {
+          products: current.products.map((p) =>
+            p.id === product.id
+              ? {
+                  ...p,
+                  stock: Number(p.stock) + qty,
+                }
+              : p,
+          ),
+          purchases: fromPaise(
+            toPaise(current.purchases) + toPaise(amount),
+          ),
+          transactions: [
+            transaction,
+            ...current.transactions,
+          ],
+        },
+        events: [eventForTransaction(transaction)],
+      };
+    }, [], `purchase-${productId}-${Date.now()}`);
+
+    if (!result.saved) {
+      return Alert.alert(
+        'Add Purchase',
+        result.error?.message ||
+          'Could not save the purchase. Please retry.',
+      );
+    }
+
+    modal('purchase', false);
   }
-  function addProduct(name, purchasePrice, sellingPrice, openingStock) {
-    const cleanName = name.trim(), buy = Number(purchasePrice), sell = Number(sellingPrice), stock = Number(openingStock);
-    if (!cleanName) return Alert.alert('Add Product', 'Enter product name.'); if (buy <= 0 || sell <= 0 || stock < 0) return Alert.alert('Add Product', 'Enter valid product values.'); if (products.some((p) => p.name.toLowerCase() === cleanName.toLowerCase())) return Alert.alert('Add Product', 'A product with this name already exists.');
-    set('products', (current) => [...current, { id: Date.now(), name: cleanName, stock, purchasePrice: buy, sellingPrice: sell }]); modal('product', false);
+
+  async function removeStock(productId, quantity, reason, note) {
+    const result = await domain((current) => {
+      const product = current.products.find(
+        (item) =>
+          String(item.id) === String(productId) &&
+          !item.archived &&
+          !item.deletedAt,
+      );
+
+      const value = Number(quantity);
+
+      if (!product) {
+        return { error: 'This product is no longer active.' };
+      }
+
+      if (!Number.isInteger(value) || value <= 0) {
+        return {
+          error: 'Enter a positive whole-number quantity.',
+        };
+      }
+
+      if (value > Number(product.stock || 0)) {
+        return {
+          error: `Only ${product.stock} units are available.`,
+        };
+      }
+
+      const adjustment = createInventoryAdjustment({
+        productId: product.id,
+        productName: product.name,
+        quantity: value,
+        reason,
+        note,
+      });
+
+      return {
+        update: {
+          products: current.products.map((item) =>
+            String(item.id) === String(product.id)
+              ? {
+                  ...item,
+                  stock:
+                    Number(item.stock || 0) - value,
+                }
+              : item,
+          ),
+          transactions: [
+            adjustment,
+            ...current.transactions,
+          ],
+        },
+        events: [eventForTransaction(adjustment)],
+      };
+    }, [], `inventory-adjustment-${productId}-${Date.now()}-${Math.random()}`);
+
+    if (!result.saved) {
+      return Alert.alert(
+        'Remove Stock',
+        result.error?.message ||
+          'Could not remove stock. Please retry.',
+      );
+    }
+
+    modal('removeStock', false);
+    setStockAdjustmentProduct(null);
   }
-  function addCustomer(name, phone, closeModal = true) {
+
+  async function addStock(productId, quantity, reason, note) {
+    const result = await domain((current) => {
+      const product = current.products.find(
+        (item) =>
+          String(item.id) === String(productId) &&
+          !item.archived &&
+          !item.deletedAt,
+      );
+
+      const value = Number(quantity);
+
+      if (!product) {
+        return { error: 'This product is no longer active.' };
+      }
+
+      if (!Number.isInteger(value) || value <= 0) {
+        return {
+          error: 'Enter a positive whole-number quantity.',
+        };
+      }
+
+      const adjustment = createInventoryAdjustment({
+        productId: product.id,
+        productName: product.name,
+        quantity: value,
+        reason,
+        note,
+        direction: 'ADD',
+      });
+
+      return {
+        update: {
+          products: current.products.map((item) =>
+            String(item.id) === String(product.id)
+              ? {
+                  ...item,
+                  stock:
+                    Number(item.stock || 0) + value,
+                }
+              : item,
+          ),
+          transactions: [
+            adjustment,
+            ...current.transactions,
+          ],
+        },
+        events: [eventForTransaction(adjustment)],
+      };
+    }, [], `inventory-addition-${productId}-${Date.now()}-${Math.random()}`);
+
+    if (!result.saved) {
+      return Alert.alert(
+        'Add Stock',
+        result.error?.message ||
+          'Could not add stock. Please retry.',
+      );
+    }
+
+    modal('addStock', false);
+    setStockAdditionProduct(null);
+  }
+
+  async function archiveProduct(id) {
+    const product = products.find(
+      (item) =>
+        String(item.id) === String(id) &&
+        !item.deletedAt,
+    );
+
+    if (!product) return;
+
+    Alert.alert(
+      'Archive Product',
+      `Archive ${product.name}? Its stock and history will remain preserved.`,
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Archive',
+          style: 'destructive',
+          onPress: async () => {
+            const result = await domain(
+              (current) => ({
+                update: {
+                  products: current.products.map((item) =>
+                    String(item.id) === String(id)
+                      ? {
+                          ...item,
+                          archived: true,
+                          archivedAt: isoNow(),
+                        }
+                      : item,
+                  ),
+                },
+              }),
+              [],
+              `archive-${id}-${Date.now()}`,
+            );
+
+            if (!result.saved) {
+              Alert.alert(
+                'Archive Product',
+                result.error?.message ||
+                  'Could not archive product.',
+              );
+            }
+          },
+        },
+      ],
+    );
+  }
+
+  async function restoreProduct(id) {
+    const result = await domain((current) => {
+      const product = current.products.find(
+        (item) => String(item.id) === String(id),
+      );
+
+      if (!product) {
+        return { error: 'Product not found.' };
+      }
+
+      if (product.deletedAt) {
+        return {
+          update: {
+            products: current.products.map((item) =>
+              String(item.id) === String(id)
+                ? {
+                    ...item,
+                    deletedAt: null,
+                    archived:
+                      item.archivedBeforeDelete === true,
+                    archivedAt:
+                      item.archivedBeforeDelete === true
+                        ? item.archivedAtBeforeDelete || null
+                        : null,
+                    archivedBeforeDelete: false,
+                    archivedAtBeforeDelete: null,
+                  }
+                : item,
+            ),
+          },
+        };
+      }
+
+      if (!product.archived) {
+        return {
+          error: 'Product is already active.',
+        };
+      }
+
+      return {
+        update: {
+          products: current.products.map((item) =>
+            String(item.id) === String(id)
+              ? {
+                  ...item,
+                  archived: false,
+                  archivedAt: null,
+                }
+              : item,
+          ),
+        },
+      };
+    }, [], `restore-${id}-${Date.now()}`);
+
+    if (!result.saved) {
+      Alert.alert(
+        'Restore Product',
+        result.error?.message ||
+          'Could not restore product.',
+      );
+    }
+  }
+
+  function deleteProduct(id) {
+    const product = products.find(
+      (item) =>
+        String(item.id) === String(id) &&
+        !item.deletedAt,
+    );
+
+    if (!product) return;
+
+    Alert.alert(
+      `Move ${product.name} to Recycle Bin?`,
+      'This product will be removed from active inventory and moved to Recycle Bin. You can restore it within 15 days. After 15 days, it will be permanently deleted.',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Move to Recycle Bin',
+          style: 'destructive',
+          onPress: async () => {
+            const result = await domain(
+              (current) => {
+                const currentProduct =
+                  current.products.find(
+                    (item) =>
+                      String(item.id) === String(id) &&
+                      !item.deletedAt,
+                  );
+
+                if (!currentProduct) {
+                  return {
+                    error:
+                      'Product is no longer available.',
+                  };
+                }
+
+                return {
+                  update: {
+                    products: current.products.map(
+                      (item) =>
+                        String(item.id) === String(id)
+                          ? {
+                              ...item,
+                              deletedAt: isoNow(),
+                              archivedBeforeDelete:
+                                item.archived === true,
+                              archivedAtBeforeDelete:
+                                item.archivedAt || null,
+                              archived: false,
+                              archivedAt: null,
+                            }
+                          : item,
+                    ),
+                  },
+                };
+              },
+              [],
+              `delete-${id}-${Date.now()}`,
+            );
+
+            if (!result.saved) {
+              Alert.alert(
+                'Move to Recycle Bin',
+                result.error?.message ||
+                  'Could not move product to Recycle Bin.',
+              );
+            }
+          },
+        },
+      ],
+    );
+  }
+
+  async function purgeExpiredDeletedProducts() {
+    const now = Date.now();
+
+    const result = await domain(
+      (current) => ({
+        update: {
+          products: current.products.filter((product) => {
+            if (!product.deletedAt) return true;
+
+            const deletedAt = new Date(
+              product.deletedAt,
+            ).getTime();
+
+            return (
+              !Number.isFinite(deletedAt) ||
+              now < deletedAt + RECYCLE_RETENTION_MS
+            );
+          }),
+        },
+      }),
+      [],
+      `purge-deleted-${now}`,
+    );
+
+    if (!result.saved) {
+      Alert.alert(
+        'Recycle Bin',
+        result.error?.message ||
+          'Could not clean up expired products.',
+      );
+    }
+
+    return result;
+  }
+
+  async function addProduct(
+    name,
+    purchasePrice,
+    sellingPrice,
+    openingStock,
+    barcode = '',
+    expiryDate = '',
+  ) {
+    const cleanName = name.trim();
+    const buy = Number(purchasePrice);
+    const sell = Number(sellingPrice);
+    const stock = Number(openingStock);
+
+    if (!cleanName) {
+      return Alert.alert(
+        'Add Product',
+        'Enter product name.',
+      );
+    }
+
+    if (buy <= 0 || sell <= 0 || stock < 0) {
+      return Alert.alert(
+        'Add Product',
+        'Enter valid product values.',
+      );
+    }
+
+    if (
+      products.some(
+        (p) =>
+          p.name.toLowerCase() ===
+          cleanName.toLowerCase(),
+      )
+    ) {
+      return Alert.alert(
+        'Add Product',
+        'A product with this name already exists.',
+      );
+    }
+
+    if (
+      barcode &&
+      products.some(
+        (p) =>
+          p.barcode &&
+          String(p.barcode) ===
+            String(barcode).trim(),
+      )
+    ) {
+      return Alert.alert(
+        'Add Product',
+        'A product with this barcode already exists.',
+      );
+    }
+
+    const product = {
+      id: nextId(),
+      name: cleanName,
+      stock,
+      purchasePrice: buy,
+      sellingPrice: sell,
+      barcode: String(barcode || '').trim(),
+      expiryDate: expiryDate || '',
+    };
+
+    const opening =
+      stock > 0
+        ? createTransaction({
+            type: 'opening-inventory',
+            productId: product.id,
+            productName: product.name,
+            quantity: stock,
+            amount: fromPaise(
+              toPaise(buy) * stock,
+            ),
+            unitCost: buy,
+            items: [
+              {
+                productId: product.id,
+                productName: product.name,
+                quantity: stock,
+                unitCost: buy,
+                unitPrice: buy,
+                amount: fromPaise(
+                  toPaise(buy) * stock,
+                ),
+                profit: 0,
+              },
+            ],
+            note: 'Opening inventory',
+          })
+        : null;
+
+    const result = await domain(
+      (current) => ({
+        update: {
+          products: [
+            ...current.products,
+            product,
+          ],
+          transactions: opening
+            ? [
+                opening,
+                ...current.transactions,
+              ]
+            : current.transactions,
+        },
+        events: opening
+          ? [eventForTransaction(opening)]
+          : [],
+      }),
+      [],
+      `product-${product.id}`,
+    );
+
+    if (!result.saved) {
+      return Alert.alert(
+        'Add Product',
+        'Could not save the product. Please retry.',
+      );
+    }
+
+    modal('product', false);
+  }
+
+  function addCustomer(
+    name,
+    phone,
+    closeModal = true,
+  ) {
     const cleanName = name.trim();
     const cleanPhone = phone.trim();
-    if (!cleanName) return Alert.alert('Add Customer', 'Enter customer name.');
-    if (customers.some((customer) => customer.name.toLowerCase() === cleanName.toLowerCase())) {
-      return Alert.alert('Add Customer', 'A customer with this name already exists.');
+
+    if (!cleanName) {
+      return Alert.alert(
+        'Add Customer',
+        'Enter customer name.',
+      );
     }
-    const customer = { id: Date.now(), name: cleanName, phone: cleanPhone, balance: 0 };
-    set('customers', (current) => [...current, customer]);
-    if (closeModal) modal('customer', false);
+
+    if (
+      customers.some(
+        (customer) =>
+          customer.name.toLowerCase() ===
+          cleanName.toLowerCase(),
+      )
+    ) {
+      return Alert.alert(
+        'Add Customer',
+        'A customer with this name already exists.',
+      );
+    }
+
+    const customer = {
+      id: nextId(),
+      name: cleanName,
+      phone: cleanPhone,
+      balance: 0,
+      createdAt: isoNow(),
+    };
+
+    domain(
+      (current) => ({
+        update: {
+          customers: [
+            ...current.customers,
+            customer,
+          ],
+        },
+      }),
+      [],
+      `customer-${customer.id}`,
+    );
+
+    if (closeModal) {
+      modal('customer', false);
+    }
+
     return customer;
   }
-  function addUdhaar(customerId, amount) { const customer = customers.find((c) => c.id === Number(customerId)), value = Number(amount); if (!customer) return Alert.alert('Add Udhaar', 'Please select a customer.'); if (!value || value <= 0) return Alert.alert('Add Udhaar', 'Enter a valid amount.'); const timestamp = Date.now(); set('customers', (current) => current.map((c) => c.id === customer.id ? { ...c, balance: Number(c.balance || 0) + value } : c)); set('transactions', (current) => [{ id: timestamp, type: 'credit', productName: customer.name, quantity: 1, amount: value, profit: 0, timestamp, customerName: customer.name, note: 'Udhaar added' }, ...current]); modal('udhaar', false); }
-  function receivePayment(customerId, amount) { const customer = customers.find((c) => c.id === Number(customerId)), value = Number(amount); if (!customer) return Alert.alert('Receive Payment', 'Please select a customer.'); if (!value || value <= 0) return Alert.alert('Receive Payment', 'Enter a valid amount.'); if (value > Number(customer.balance || 0)) return Alert.alert('Receive Payment', `Outstanding balance is only ${money(customer.balance)}.`); const timestamp = Date.now(); set('customers', (current) => current.map((c) => c.id === customer.id ? { ...c, balance: Number(c.balance || 0) - value } : c)); set('transactions', (current) => [{ id: timestamp, type: 'payment', productName: customer.name, quantity: 1, amount: value, profit: 0, timestamp, customerName: customer.name, note: 'Payment received' }, ...current]); modal('payment', false); }
-  const data = useMemo(() => ({ products, sales, purchases, transactions, customers, totalStockValue: totalStockValue(products), totalProfit: totalProfit(transactions), totalUdhaar: totalUdhaar(customers) }), [products, sales, purchases, transactions, customers]);
-  const title = activeTab === 'home' ? 'Dashboard' : activeTab === 'inventory' ? 'Inventory' : activeTab === 'customers' ? 'Customers' : 'Transactions';
-  return <SafeAreaView style={styles.safeArea}><StatusBar barStyle="dark-content" /><View style={styles.appShell}><View style={styles.topBar}><View><Text style={styles.appTitle}>DukaanOS</Text><Text style={styles.appSubtitle}>{title}</Text></View><View style={styles.avatar}><Text style={styles.avatarText}>D</Text></View></View><View style={{ flex: 1 }}>{activeTab === 'home' ? <HomeScreen data={data} actions={actions} /> : activeTab === 'inventory' ? <InventoryScreen products={products} search={search} setSearch={setSearch} actions={actions} /> : activeTab === 'customers' ? <CustomersScreen customers={customers} actions={actions} /> : <TransactionsScreen transactions={transactions} />}</View><View style={styles.bottomNav}>{[['home', '⌂', 'Home'], ['inventory', '▦', 'Stock'], ['customers', '♙', 'Customers'], ['transactions', '↕', 'History']].map(([tab, icon, label]) => <Pressable key={tab} onPress={() => setActiveTab(tab)} style={styles.navItem}><Text style={[styles.navIcon, activeTab === tab && styles.navIconActive]}>{icon}</Text><Text style={[styles.navLabel, activeTab === tab && styles.navLabelActive]}>{label}</Text></Pressable>)}</View></View>
-  <SaleModal visible={!!modals.sale} products={products} customers={customers} onConfirm={recordSale} onAddCustomer={(name, phone) => addCustomer(name, phone, false)} onCancel={() => modal('sale', false)} /><PurchaseModal visible={!!modals.purchase} products={products} onConfirm={recordPurchase} onCancel={() => modal('purchase', false)} /><AddProductModal visible={!!modals.product} onConfirm={addProduct} onCancel={() => modal('product', false)} /><AddCustomerModal visible={!!modals.customer} onConfirm={addCustomer} onCancel={() => modal('customer', false)} /><UdhaarModal visible={!!modals.udhaar} customers={customers} onConfirm={addUdhaar} onCancel={() => modal('udhaar', false)} /><PaymentModal visible={!!modals.payment} customers={customers} onConfirm={receivePayment} onCancel={() => modal('payment', false)} /></SafeAreaView>;
+
+  async function addUdhaar(customerId, amount) {
+    const value = Number(amount);
+
+    const result = await domain(
+      (current) => {
+        const customer = current.customers.find(
+          (c) =>
+            String(c.id) === String(customerId),
+        );
+
+        if (!customer) {
+          return {
+            error: 'Please select a customer.',
+          };
+        }
+
+        if (
+          !Number.isFinite(value) ||
+          value <= 0
+        ) {
+          return {
+            error: 'Enter a valid amount.',
+          };
+        }
+
+        const transaction =
+          createTransaction({
+            type: 'credit',
+            productName: customer.name,
+            quantity: 1,
+            amount: fromPaise(
+              toPaise(value),
+            ),
+            customerName: customer.name,
+            customerId: customer.id,
+            note: 'Udhaar added',
+          });
+
+        return {
+          update: {
+            transactions: [
+              transaction,
+              ...current.transactions,
+            ],
+          },
+          events: [
+            eventForTransaction(transaction),
+          ],
+        };
+      },
+      [],
+      `credit-${customerId}-${Date.now()}`,
+    );
+
+    if (!result.saved) {
+      return Alert.alert(
+        'Add Udhaar',
+        result.error?.message ||
+          'Could not save udhaar.',
+      );
+    }
+
+    modal('udhaar', false);
+  }
+
+  async function receivePayment(
+    customerId,
+    amount,
+  ) {
+    const value = Number(amount);
+
+    const result = await domain(
+      (current) => {
+        const customer =
+          current.customers.find(
+            (c) =>
+              String(c.id) ===
+              String(customerId),
+          );
+
+        const outstanding = customer
+          ? customerBalance(
+              current.transactions,
+              customer.id,
+            )
+          : 0;
+
+        if (!customer) {
+          return {
+            error: 'Please select a customer.',
+          };
+        }
+
+        if (
+          !Number.isFinite(value) ||
+          value <= 0
+        ) {
+          return {
+            error: 'Enter a valid amount.',
+          };
+        }
+
+        if (
+          toPaise(value) >
+          toPaise(outstanding)
+        ) {
+          return {
+            error: `Outstanding balance is only ${money(
+              outstanding,
+            )}.`,
+          };
+        }
+
+        const transaction =
+          createTransaction({
+            type: 'payment',
+            productName: customer.name,
+            quantity: 1,
+            amount: fromPaise(
+              toPaise(value),
+            ),
+            customerName: customer.name,
+            customerId: customer.id,
+            note: 'Payment received',
+          });
+
+        return {
+          update: {
+            transactions: [
+              transaction,
+              ...current.transactions,
+            ],
+          },
+          events: [
+            eventForTransaction(transaction),
+          ],
+        };
+      },
+      [],
+      `payment-${customerId}-${Date.now()}`,
+    );
+
+    if (!result.saved) {
+      return Alert.alert(
+        'Receive Payment',
+        result.error?.message ||
+          'Could not save payment.',
+      );
+    }
+
+    modal('payment', false);
+  }
+
+  async function reversePayment(payment) {
+    if (
+      !payment ||
+      payment.type !== 'payment'
+    ) {
+      return;
+    }
+
+    const result = await domain(
+      (current) => {
+        const currentPayment =
+          current.transactions.find(
+            (item) =>
+              item.id === payment.id,
+          );
+
+        if (
+          !currentPayment ||
+          currentPayment.type !==
+            'payment'
+        ) {
+          return {
+            error:
+              'Payment is no longer available.',
+          };
+        }
+
+        if (
+          current.transactions.some(
+            (item) =>
+              item.type ===
+                'payment-reversal' &&
+              item.reversesTransactionId ===
+                currentPayment.id,
+          )
+        ) {
+          return {
+            error:
+              'This payment has already been reversed.',
+          };
+        }
+
+        const reversal =
+          createTransaction({
+            type: 'payment-reversal',
+            productName:
+              currentPayment.productName,
+            customerName:
+              currentPayment.customerName,
+            customerId:
+              currentPayment.customerId,
+            amount:
+              currentPayment.amount,
+            quantity: 1,
+            note: `Reversal of payment ${currentPayment.id}`,
+            paymentMethod:
+              currentPayment.paymentMethod,
+          });
+
+        reversal.reversesTransactionId =
+          currentPayment.id;
+
+        return {
+          update: {
+            transactions: [
+              reversal,
+              ...current.transactions,
+            ],
+          },
+          events: [
+            eventForTransaction(reversal),
+          ],
+        };
+      },
+      [],
+      `reverse-payment-${payment.id}`,
+    );
+
+    if (!result.saved) {
+      Alert.alert(
+        'Reverse payment',
+        result.error?.message ||
+          'Could not reverse the payment. Please retry.',
+      );
+    }
+  }
+
+  async function recordExpense(
+    category,
+    amount,
+    note,
+  ) {
+    const value = Number(amount);
+
+    if (
+      !Number.isFinite(value) ||
+      value <= 0
+    ) {
+      return Alert.alert(
+        'Add Expense',
+        'Enter a valid amount.',
+      );
+    }
+
+    const expense = createExpense({
+      category:
+        category.trim() || 'general',
+      amount: fromPaise(
+        toPaise(value),
+      ),
+      note: note.trim(),
+    });
+
+    const result = await domain(
+      (current) => ({
+        update: {
+          expenses: [
+            expense,
+            ...(current.expenses || []),
+          ],
+        },
+      }),
+      [],
+      `expense-${expense.id}`,
+    );
+
+    if (!result.saved) {
+      return Alert.alert(
+        'Add Expense',
+        'Could not save the expense. Please retry.',
+      );
+    }
+
+    modal('expense', false);
+  }
+
+  const customerViews = useMemo(
+    () =>
+      customers.map((customer) => ({
+        ...customer,
+        balance: customerBalance(
+          transactions,
+          customer.id,
+        ),
+      })),
+    [customers, transactions],
+  );
+
+  const activeProducts = useMemo(
+    () =>
+      products.filter(
+        (product) =>
+          !product.archived &&
+          !product.deletedAt,
+      ),
+    [products],
+  );
+
+  const archivedProducts = useMemo(
+    () =>
+      products.filter(
+        (product) =>
+          product.archived &&
+          !product.deletedAt,
+      ),
+    [products],
+  );
+
+  const deletedProducts = useMemo(
+    () =>
+      products.filter(
+        (product) => product.deletedAt,
+      ),
+    [products],
+  );
+
+  useEffect(() => {
+    if (
+      state.hydrated &&
+      !startupPurgeRequested.current
+    ) {
+      startupPurgeRequested.current = true;
+      purgeExpiredDeletedProducts();
+    }
+  }, [state.hydrated]);
+
+  const data = useMemo(
+    () => ({
+      products: activeProducts,
+      sales,
+      purchases,
+      transactions,
+      customers: customerViews,
+      searchQuery,
+      setSearchQuery,
+      totalStockValue:
+        totalStockValue(activeProducts),
+      totalProfit:
+        totalProfit(transactions),
+      totalUdhaar:
+        totalUdhaar(
+          customerViews,
+          transactions,
+        ),
+    }),
+    [
+      activeProducts,
+      sales,
+      purchases,
+      transactions,
+      customerViews,
+      searchQuery,
+    ],
+  );
+
+  const title =
+    activeTab === 'home'
+      ? 'Dashboard'
+      : activeTab === 'inventory'
+        ? 'Inventory'
+        : activeTab === 'customers'
+          ? 'Customers'
+          : activeTab === 'collections'
+            ? 'Collections'
+            : activeTab === 'reports'
+              ? 'Reports'
+              : activeTab === 'archive'
+                ? 'Archive'
+                : activeTab === 'recycleBin'
+                  ? 'Recycle Bin'
+                  : activeTab === 'ai'
+                    ? 'AI Assistant'
+                    : 'Transactions';
+
+  const menuItems = [
+    ['home', 'Home'],
+    ['inventory', 'Stock'],
+    ['customers', 'Customers'],
+    ['transactions', 'History'],
+    ['archive', 'Archive'],
+    ['recycleBin', 'Recycle Bin'],
+    ['ai', 'AI Assistant'],
+  ];
+
+  const selectTab = (tab) => {
+    setActiveTab(tab);
+    setMenuOpen(false);
+
+    if (tab === 'recycleBin') {
+      purgeExpiredDeletedProducts();
+    }
+  };
+
+  return (
+    <View
+      style={[
+        styles.safeArea,
+        {
+          paddingTop: insets.top,
+          paddingBottom: insets.bottom,
+        },
+      ]}
+    >
+      <StatusBar barStyle="dark-content" />
+
+      <View style={styles.appShell}>
+        <View
+          pointerEvents="none"
+          style={styles.shellBackground}
+        />
+
+        <ManuscriptBackdrop />
+
+        <View style={styles.appContentLayer}>
+          <View style={styles.topBar}>
+            <View>
+              <Text style={styles.appTitle}>
+                DU
+                <Text style={{ color: '#C89B3C' }}>
+                  KAN
+                </Text>
+                <Text style={{ color: '#8B2638' }}>
+                  OS
+                </Text>
+              </Text>
+
+              <Text style={styles.appSubtitle}>
+                {title}
+              </Text>
+            </View>
+
+            <Pressable
+              onPress={() =>
+                setMenuOpen(
+                  (open) => !open,
+                )
+              }
+              accessibilityRole="button"
+              accessibilityLabel={
+                menuOpen
+                  ? 'Close navigation menu'
+                  : 'Open navigation menu'
+              }
+              accessibilityState={{
+                expanded: menuOpen,
+              }}
+              style={styles.menuButton}
+            >
+              <Text style={styles.menuButtonText}>
+                ☰
+              </Text>
+            </Pressable>
+
+            {menuOpen ? (
+              <View style={styles.menuPanel}>
+                {menuItems.map(
+                  ([tab, label]) => (
+                    <Pressable
+                      key={tab}
+                      onPress={() =>
+                        selectTab(tab)
+                      }
+                      accessibilityRole="menuitem"
+                      style={[
+                        styles.menuItem,
+                        activeTab === tab &&
+                          styles.menuItemActive,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.menuItemText,
+                          activeTab === tab &&
+                            styles.menuItemTextActive,
+                        ]}
+                      >
+                        {label}
+                      </Text>
+                    </Pressable>
+                  ),
+                )}
+              </View>
+            ) : null}
+          </View>
+
+          <View style={styles.mainContent}>
+            {activeTab === 'home' ? (
+              <HomeScreen
+                data={data}
+                actions={actions}
+              />
+            ) : activeTab === 'inventory' ? (
+              <InventoryScreen
+                products={activeProducts}
+                search={search}
+                setSearch={setSearch}
+                actions={actions}
+              />
+            ) : activeTab === 'customers' ? (
+              <CustomersScreen
+                customers={customerViews}
+                actions={actions}
+              />
+            ) : activeTab === 'collections' ? (
+              <CollectionsScreen
+                customers={customerViews}
+                actions={actions}
+              />
+            ) : activeTab === 'reports' ? (
+              <ReportsScreen
+                state={{
+                  ...state,
+                  customers: customerViews,
+                }}
+              />
+            ) : activeTab === 'archive' ? (
+              <ArchiveScreen
+                products={archivedProducts}
+                actions={actions}
+              />
+            ) : activeTab === 'recycleBin' ? (
+              <RecycleBinScreen
+                products={deletedProducts}
+                actions={actions}
+              />
+            ) : activeTab === 'ai' ? (
+             <AIAssistantScreen
+  businessData={{
+    products: activeProducts,
+    customers: customerViews,
+    transactions,
+    sales,
+    purchases,
+    totalProfit: totalProfit(transactions),
+    totalUdhaar: totalUdhaar(
+      customerViews,
+      transactions,
+    ),
+    totalStockValue:
+      totalStockValue(activeProducts),
+  }}
+/>
+          </View>
+
+          <SaleModal
+            visible={!!modals.sale}
+            products={activeProducts}
+            customers={customerViews}
+            onConfirm={recordSale}
+            onAddCustomer={(name, phone) =>
+              addCustomer(
+                name,
+                phone,
+                false,
+              )
+            }
+            onCancel={() =>
+              modal('sale', false)
+            }
+          />
+
+          <PurchaseModal
+            visible={!!modals.purchase}
+            products={activeProducts}
+            onConfirm={recordPurchase}
+            onCancel={() =>
+              modal('purchase', false)
+            }
+          />
+
+          <RemoveStockModal
+            visible={!!modals.removeStock}
+            product={
+              stockAdjustmentProduct
+            }
+            onConfirm={removeStock}
+            onCancel={() => {
+              modal(
+                'removeStock',
+                false,
+              );
+              setStockAdjustmentProduct(
+                null,
+              );
+            }}
+          />
+
+          <AddStockModal
+            visible={!!modals.addStock}
+            product={stockAdditionProduct}
+            onConfirm={addStock}
+            onCancel={() => {
+              modal(
+                'addStock',
+                false,
+              );
+              setStockAdditionProduct(
+                null,
+              );
+            }}
+          />
+
+          <AddProductModal
+            visible={!!modals.product}
+            onConfirm={addProduct}
+            onCancel={() =>
+              modal('product', false)
+            }
+          />
+
+          <AddCustomerModal
+            visible={!!modals.customer}
+            onConfirm={addCustomer}
+            onCancel={() =>
+              modal('customer', false)
+            }
+          />
+
+          <UdhaarModal
+            visible={!!modals.udhaar}
+            customers={customerViews}
+            onConfirm={addUdhaar}
+            onCancel={() =>
+              modal('udhaar', false)
+            }
+          />
+
+          <PaymentModal
+            visible={!!modals.payment}
+            customers={customerViews}
+            onConfirm={receivePayment}
+            onCancel={() =>
+              modal('payment', false)
+            }
+          />
+
+          <ExpenseModal
+            visible={!!modals.expense}
+            onConfirm={recordExpense}
+            onCancel={() =>
+              modal('expense', false)
+            }
+          />
+        </View>
+      </View>
+    </View>
+  );
 }
-export default function App() { return <DukaanProvider><Dashboard /></DukaanProvider>; }
+
+function AuthScreen() {
+  const {
+    signIn,
+    signUp,
+    error,
+    loading,
+  } = useAuth();
+
+  const [mode, setMode] = useState('signin');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] =
+    useState('');
+  const [submitting, setSubmitting] =
+    useState(false);
+  const [formError, setFormError] =
+    useState('');
+
+  useEffect(() => {
+    setFormError(error || '');
+  }, [error]);
+
+  const handleSubmit = async () => {
+    const trimmedEmail =
+      email.trim();
+    const trimmedPassword =
+      password.trim();
+
+    if (
+      !trimmedEmail ||
+      !trimmedPassword
+    ) {
+      setFormError(
+        'Enter both an email address and password.',
+      );
+      return;
+    }
+
+    setFormError('');
+    setSubmitting(true);
+
+    const result =
+      mode === 'signup'
+        ? await signUp(
+            trimmedEmail,
+            trimmedPassword,
+          )
+        : await signIn(
+            trimmedEmail,
+            trimmedPassword,
+          );
+
+    if (result?.error) {
+      setFormError(
+        String(
+          result.error.message ||
+            result.error,
+        ),
+      );
+    }
+
+    setSubmitting(false);
+  };
+
+  return (
+    <View
+      style={[
+        styles.safeArea,
+        {
+          justifyContent:
+            'center',
+          paddingHorizontal: 20,
+          paddingVertical: 32,
+        },
+      ]}
+    >
+      <View
+        style={[
+          styles.sectionCard,
+          {
+            padding: 24,
+            borderRadius: 22,
+            backgroundColor:
+              '#FFFDF8',
+          },
+        ]}
+      >
+        <Text
+          style={[
+            styles.appTitle,
+            {
+              textAlign: 'center',
+              fontSize: 32,
+              marginBottom: 8,
+            },
+          ]}
+        >
+          DU
+          <Text
+            style={{
+              color: '#C89B3C',
+            }}
+          >
+            KAN
+          </Text>
+          <Text
+            style={{
+              color: '#8B2638',
+            }}
+          >
+            OS
+          </Text>
+        </Text>
+
+        <Text
+          style={[
+            styles.appSubtitle,
+            {
+              textAlign: 'center',
+              marginBottom: 20,
+              fontSize: 13,
+            },
+          ]}
+        >
+          Storefront access
+        </Text>
+
+        <View
+          style={{
+            flexDirection:
+              'row',
+            borderWidth: 1,
+            borderColor:
+              '#D6C8B8',
+            borderRadius: 14,
+            overflow: 'hidden',
+            marginBottom: 18,
+          }}
+        >
+          <Pressable
+            onPress={() =>
+              setMode('signin')
+            }
+            style={[
+              {
+                flex: 1,
+                minHeight: 44,
+                alignItems:
+                  'center',
+                justifyContent:
+                  'center',
+              },
+              mode ===
+                'signin'
+                ? {
+                    backgroundColor:
+                      '#6E1428',
+                  }
+                : {
+                    backgroundColor:
+                      '#F7F1E3',
+                  },
+            ]}
+          >
+            <Text
+              style={[
+                styles.buttonText,
+                mode ===
+                'signin'
+                  ? {
+                      color:
+                        '#FFFDF8',
+                    }
+                  : {
+                      color:
+                        '#2B2522',
+                    },
+              ]}
+            >
+              Sign In
+            </Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() =>
+              setMode('signup')
+            }
+            style={[
+              {
+                flex: 1,
+                minHeight: 44,
+                alignItems:
+                  'center',
+                justifyContent:
+                  'center',
+              },
+              mode ===
+                'signup'
+                ? {
+                    backgroundColor:
+                      '#6E1428',
+                  }
+                : {
+                    backgroundColor:
+                      '#F7F1E3',
+                  },
+            ]}
+          >
+            <Text
+              style={[
+                styles.buttonText,
+                mode ===
+                'signup'
+                  ? {
+                      color:
+                        '#FFFDF8',
+                    }
+                  : {
+                      color:
+                        '#2B2522',
+                    },
+              ]}
+            >
+              Sign Up
+            </Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.fieldWrap}>
+          <Text
+            style={
+              styles.fieldLabel
+            }
+          >
+            Email
+          </Text>
+
+          <TextInput
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="email-address"
+            value={email}
+            onChangeText={setEmail}
+            placeholder="you@example.com"
+            placeholderTextColor="#A49487"
+            style={styles.input}
+          />
+        </View>
+
+        <View style={styles.fieldWrap}>
+          <Text
+            style={
+              styles.fieldLabel
+            }
+          >
+            Password
+          </Text>
+
+          <TextInput
+            secureTextEntry
+            value={password}
+            onChangeText={
+              setPassword
+            }
+            placeholder="Password"
+            placeholderTextColor="#A49487"
+            style={styles.input}
+          />
+        </View>
+
+        {formError ||
+        (error && !loading) ? (
+          <Text
+            style={[
+              styles.startupError,
+              {
+                marginBottom: 12,
+                textAlign:
+                  'left',
+                maxWidth:
+                  '100%',
+              },
+            ]}
+          >
+            {formError || error}
+          </Text>
+        ) : null}
+
+        <Pressable
+          onPress={
+            handleSubmit
+          }
+          disabled={
+            submitting ||
+            loading
+          }
+          style={[
+            styles.button,
+            styles.primaryButton,
+            (submitting ||
+              loading) &&
+              styles.disabledButton,
+          ]}
+        >
+          <Text
+            style={[
+              styles.buttonText,
+              styles.primaryButtonText,
+            ]}
+          >
+            {submitting
+              ? 'Please wait…'
+              : mode ===
+                'signup'
+                ? 'Create account'
+                : 'Sign in'}
+          </Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function AppShell() {
+  const {
+    isAuthenticated,
+    loading,
+  } = useAuth();
+
+  if (loading) {
+    return (
+      <View
+        style={
+          styles.startupScreen
+        }
+      >
+        <View
+          style={
+            styles.startupMark
+          }
+        >
+          <Text
+            style={
+              styles.startupMarkText
+            }
+          >
+            DUK{' '}
+            <Text
+              style={{
+                color:
+                  '#C89B3C',
+              }}
+            >
+              KAN
+            </Text>{' '}
+            <Text
+              style={{
+                color:
+                  '#F2C7D0',
+              }}
+            >
+              OS
+            </Text>
+          </Text>
+        </View>
+
+        <Text
+          style={
+            styles.startupTitle
+          }
+        >
+          DukaanOS
+        </Text>
+
+        <View
+          style={
+            styles.startupRule
+          }
+        />
+
+        <Text
+          style={
+            styles.startupSubtitle
+          }
+        >
+          Loading your account…
+        </Text>
+      </View>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <AuthScreen />;
+  }
+
+  return (
+    <ShopProvider>
+      <DukaanProvider>
+        <Dashboard />
+      </DukaanProvider>
+    </ShopProvider>
+  );
+}
+
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <AuthProvider>
+        <AppShell />
+      </AuthProvider>
+    </SafeAreaProvider>
+  );
+}

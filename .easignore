@@ -1,0 +1,9 @@
+node_modules/
+.expo/
+dist/
+*.log
+
+# Never upload host-specific Gradle/autolinking output.
+android/.gradle/
+android/.kotlin/
+android/**/build/
