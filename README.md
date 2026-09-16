@@ -1,6 +1,6 @@
 # DukaanOS
 
-DukaanOS is an AI-assisted retail management application for small Indian retailers and shopkeepers. It brings daily shop operations—stock, sales, purchases, customer credit, collections, and reporting—into one practical mobile workspace.
+DukaanOS is an AI-assisted retail management application for small Indian retailers and shopkeepers. It brings stock, sales, purchases, customer credit, collections, and reporting into one mobile workspace.
 
 ## Implementation Status
 
@@ -18,29 +18,30 @@ DukaanOS is an AI-assisted retail management application for small Indian retail
 - Archive and restore for products
 - Recycle Bin with restore and 15-day purge
 - Add Stock and Remove Stock inventory adjustments
-- Supabase email authentication
-- Supabase shop and membership management
+- Supabase email authentication with persisted client sessions
+- Supabase shop and membership integration
 - Gemini 3.5 Flash AI Assistant through a Supabase Edge Function
 - Encrypted local snapshot persistence
 
 ### In progress
 
-- The AI Assistant is currently read-only and uses business context supplied by the mobile app.
+- The business-data layer is local-first. Each business operation is persisted locally through the DukaanOS storage/domain layer, with operation IDs and event records providing the foundation for reliable synchronization.
+- A reusable authenticated API client and Supabase integration are present, but the current public repository does not contain a complete local-to-Supabase business-record sync worker or a documented automatic cloud reconciliation flow.
+- The AI Assistant is read-only and receives bounded business context from the mobile app.
 - Barcode and expiry utilities are present as supporting functionality rather than a complete barcode/expiry management workflow.
-- Cloud synchronization of business records is not implemented in the current repository.
 
 ### Planned
 
-- Complete cloud synchronization for financial and operational business records
-- Multi-device synchronization and conflict resolution for business data
+- Complete automatic synchronization of financial and operational business records to Supabase
+- Multi-device synchronization and documented conflict-resolution behavior
 
 ## Overview
 
 Small retailers often manage inventory and **udhaar** (customer credit) across notebooks, memory, and disconnected tools. DukaanOS provides a single mobile workflow while remaining useful offline-first.
 
-Local business state is persisted on the device. Supabase currently provides authentication, shop membership, and the server-side boundary used by the AI Assistant. Business records such as sales, inventory, purchases, and udhaar are not currently synchronized to Supabase.
+Supabase is connected to the application for authentication, shop/membership integration, and the server-side AI boundary. The mobile app currently keeps operational business state locally and persists it as encrypted snapshots. The codebase also contains the operation/event model and API-client foundation intended to support cloud synchronization.
 
-The project is an active work-in-progress. The current business-data architecture is local-first, with encrypted device snapshots and a separate Supabase-backed authentication and AI integration.
+The project is an active work-in-progress. This README distinguishes the Supabase cloud backend integration that is currently present from the separate automatic business-record synchronization layer that is not yet verifiable in the public repository.
 
 ## Key Features
 
@@ -66,7 +67,7 @@ The project is an active work-in-progress. The current business-data architectur
 
 The AI Assistant is powered by **Gemini 3.5 Flash** and is implemented as a live end-to-end request flow.
 
-The mobile app assembles a bounded business context containing shop information, summary values, products, customers, and recent transactions. `src/services/aiService.js` sends the user's question and that context to the `gemini-chat` Supabase Edge Function. The Edge Function calls Gemini 3.5 Flash using the server-side `GEMINI_API_KEY` secret and returns the generated response to the mobile app.
+The mobile app assembles bounded business context containing shop information, summary values, products, customers, and recent transactions. `src/services/aiService.js` sends the user's question and that context to the `gemini-chat` Supabase Edge Function. The Edge Function calls Gemini using the server-side `GEMINI_API_KEY` secret and returns the generated response to the mobile app.
 
 It can answer questions about:
 
@@ -75,16 +76,6 @@ It can answer questions about:
 - Customers and udhaar balances
 - Payments and transactions
 - Profit and business summaries
-
-Example questions:
-
-> How much did I sell today?
-
-> Which products have low stock?
-
-> How much does Ramesh owe me?
-
-> What is my total profit?
 
 The assistant is **read-only**. It cannot create, edit, delete, sell, purchase, collect payment, or otherwise mutate DukaanOS data.
 
@@ -100,42 +91,34 @@ Supabase Edge Function: gemini-chat
 Gemini 3.5 Flash
 ```
 
-The Edge Function currently has JWT verification disabled in `supabase/config.toml`. This is an important deployment boundary to review before using the function with sensitive production business data; the mobile client and CORS configuration should not be treated as authorization by themselves.
+The Edge Function currently has JWT verification disabled in `supabase/config.toml`. This should be reviewed before broad production exposure; a mobile client key and CORS configuration are not authorization by themselves.
 
-## Architecture
+## Cloud / Supabase Architecture
 
 ### Mobile application
 
 - React Native / Expo application
-- Business operations are performed locally
-- Business state is persisted as encrypted snapshots on the device
-- Transaction and inventory operations are represented in local application services
+- Business operations run locally first
+- Business state is persisted as encrypted device snapshots
+- Domain operations are serialized through a command queue
+- Operation IDs are supported for duplicate-operation protection
+- Business events are retained locally as part of the operation model
 
 ### Supabase
 
 - Supabase Auth provides email authentication and persisted client sessions.
 - Supabase is used for shop and membership integration.
+- `src/services/supabaseClient.js` initializes the public Supabase client.
+- `src/services/apiClient.js` provides an authenticated HTTP client with timeout and retry handling.
 - The `gemini-chat` Edge Function provides the server-side boundary for Gemini requests.
-- The repository does not currently contain a business-record synchronization schema, synchronization worker, or conflict-resolution implementation.
+- The public repository does not currently expose a complete business-record sync worker, sync endpoint implementation, or conflict-resolution implementation that would justify describing automatic local-to-cloud synchronization as fully implemented.
 
-### AI request flow
-
-```text
-Mobile App
-    ↓
-src/services/aiService.js
-    ↓
-Supabase Edge Function: gemini-chat
-    ↓
-Gemini 3.5 Flash
-```
-
-The Gemini API key is kept as a Supabase Edge Function secret and is not stored in the mobile application.
+This distinction matters: **Supabase integration is implemented; complete automatic synchronization of the local business database is still separate work in the public codebase.**
 
 ## Data and Security Notes
 
 - The Expo client reads `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY` from environment configuration.
-- The Supabase client uses the public/anon key; the service-role key is not part of the mobile client configuration.
+- The mobile client uses the public/anon Supabase key; service-role credentials are not part of the client configuration.
 - Local business snapshots use AES-256-GCM encryption with a device-local key stored through Expo SecureStore.
 - Gemini credentials are kept server-side in the Supabase Edge Function environment.
 - `.env` and Supabase temporary files are excluded from version control through `.gitignore`.
@@ -236,13 +219,13 @@ For an Android preview build through EAS:
 npx eas build --platform android --profile preview
 ```
 
+## Project History
+
+The Git history shows the backend work as a sequence rather than a single undocumented change: Supabase client bootstrap, authentication foundation, shop membership foundation, a checkpoint explicitly named `Checkpoint before cloud sync`, and the later Supabase/Gemini integration commit. The public main branch currently contains the resulting Supabase integration and local-first operation architecture, but not enough code to verify a completed automatic business-record cloud-sync pipeline.
+
 ## Project Status
 
-DukaanOS is an active work-in-progress. The application has a functional local-first retail workflow and a working Gemini AI integration, while cloud synchronization and other future capabilities remain separate implementation work.
-
-## Product Scope
-
-The project is being developed as a practical retail-management application and as a hands-on software project. The implementation status above is intended to distinguish working functionality from work that is still planned.
+DukaanOS is an active work-in-progress. The current repository contains a functional local-first retail workflow, Supabase authentication/shop integration, and a working Gemini AI integration. Automatic cloud synchronization of the operational business dataset remains a distinct implementation area unless additional sync code or deployment details are added to the repository.
 
 ## License
 
